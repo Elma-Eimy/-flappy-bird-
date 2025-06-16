@@ -28,10 +28,10 @@ def get_args():
     也就是说模型会以多少的概率做出随机动作以获取经验，因为一开始的模型并没有多少经验所以我们可以设置一个较大的贪心概率""")
     parser.add_argument('--final_epsilon', type=float, default=1e-4, help="""最后收敛后做出随机动作的概率，
     也就是说当前模型已经学习到了足够的经验，做出鲁莽的行动的概率应该很小，但是为了保证模型的活性，仍然需要设置一个较小的随机动作概率""")
-    parser.add_argument('--num_iters', type=int, default=50000, help='设置迭代训练次数')
+    parser.add_argument('--num_iters', type=int, default=2000000, help='设置迭代训练次数')
     parser.add_argument('--replay_memory_size', type=int, default=30000, help='设置智能体和环境互动的经验内存大小')
     parser.add_argument('--log_path', type=str, default='train_result\\tensorboard', help="设置训练日志存放路径")
-    parser.add_argument('--save-path', type=str, default='train_result', help='设置模型存放路径')
+    parser.add_argument('--saved_path', type=str, default='train_result', help='设置模型存放路径')
     args = parser.parse_args()
     return args
 
@@ -44,7 +44,8 @@ def train(opt):
     else:
         torch.manual_seed(520)
     model = FlappyCNN.FlappyCNN()   # 引入卷积模型
-    # model = torch.load("flappy_bird".format(opt.saved_path), map_location=lambda storage, loc:storage)
+    # 加载模型，分批训练时可用
+    # model = torch.load("train_result/models/flappy_bird_2200000", map_location=lambda storage, loc: storage, weights_only=False)
     if os.path.isdir(opt.log_path):     # 检验训练日志路径，并更新训练日志，以免发生冲突
         shutil.rmtree(opt.log_path)
     os.makedirs(opt.log_path)
@@ -62,11 +63,11 @@ def train(opt):
     state = torch.cat(tuple(image for _ in range(4)))[None, :, :, :]    # 初始时四张图片合并在一起以清晰小鸟的运动轨迹，并额外的添加维度，满足Pytorch的卷积需求
 
     replay_memory = []      # 建立样本池子，以供深度学习进行训练
-    """
     loss_memory = []
     iter_num = []
-    """
     iter = 0        # 迭代次数
+
+    # 开始进行训练
     while iter < opt.num_iters:     # 如果迭代次数小于给定的次数则循环
         prediction = model(state)[0]        # 返回预期值
         # 建立基础的贪心策略算法
@@ -74,7 +75,8 @@ def train(opt):
         u = random()    # 随机产生动作
         random_action = u <= epsilon
         if random_action:
-            print("随机产生一个动作")  # 产生的动作随着iter增大而减少
+            if iter % 500 == 0:
+                print("随机产生一个动作")  # 产生的动作随着iter增大而减少
             action = randint(0, 1)      # 探索中
         else:
             action = torch.argmax(prediction).item()    # 开始利用策略产生动作，即使用期望最大的值来产生动作
@@ -120,7 +122,7 @@ def train(opt):
             tuple(reward if terminal else reward + opt.gamma * torch.max(prediction) for reward, terminal, prediction
                   in zip(reward_batch, terminal_batch, next_prediction_batch)))
 
-        # 当前q_value张量
+        # 当前q_value
         q_value = torch.sum(current_prediction_batch * action_batch, dim=1)
         optimizer.zero_grad()  # 用的梯度包含上一个batch的，相当于batch_size为之前的两倍，所以optimizer.step()是用在batch里的
         loss = criterion(q_value, y_batch)
@@ -129,38 +131,42 @@ def train(opt):
         # 状态更新
         state = next_state
         iter += 1
-        print(iter)
-        '''
-        # 状态监测
-        print("Iteration: {}/{}, Action: {}, Loss: {}, Epsilon {}, Reward: {}, Q-value: {}".format(
+        if iter % 5000 == 0:
+            print(iter)
+        # 状态监测,因为迭代的次数太多了就不显示了
+        """print("Iteration: {}/{}, Action: {}, Loss: {}, Epsilon {}, Reward: {}, Q-value: {}".format(
                     iter + 1,
                     opt.num_iters,
                     action,
                     loss,
-                    epsilon, reward, torch.max(prediction)))'''
+                    epsilon, reward, torch.max(prediction)))"""
         # 记录生成日志
         log_writer.add_scalar('Train/Loss', loss, iter)
         log_writer.add_scalar('Train/Epsilon', float(epsilon), iter)
         log_writer.add_scalar('Train/Reward', reward, iter)
         log_writer.add_scalar('Train/Q-value', torch.max(prediction).item(), iter)
-        ''' # 进行损失函数的采样
-                if(iter+1) % 500 == 0:# 迭代500次采样一次loss
-                    loss_memory.append(loss.item())
-                    iter_num.append(iter+1)'''
-        if (iter + 1) % 50000 == 0:  # 训练到一定的程度就进行储存
+        # 进行损失函数的采样
+
+        if (iter+1) % 1000 == 0:  # 迭代1000次采样一次loss
+            loss_memory.append(loss.item())
+            iter_num.append(iter+1)
+
+        if (iter + 1) % 100000 == 0:  # 训练到一定的程度就进行储存
             print(iter + 1)
-            torch.save(model, "{}/flappy_bird_{}".format(opt.saved_path, iter + 1))
-        '''
-        # 生成折线图可选
-            if (iter+1) % 1000000 == 0:#共采样2000个点
-                plt.figure(figsize=(20, 8), dpi=80)
-                plt.ylabel('Recon_loss')
-                plt.xlabel('iter_num')
-                print(iter_num,loss_memory)
-                lt.plot(iter_num,loss_memory)
-                plt.savefig("{}/flappy_bird_{}.jpg".format(opt.saved_path, iter+1))
-                    '''
-    torch.save(model, "{}/flappy_bird_{}".format(opt.saved_path, iter + 1))
+            torch.save(model, "{}/flappy_bird_{}".format(os.path.join(opt.saved_path, 'models'), iter+1))
+
+    # 生成折线图
+        if (iter+1) % 1000000 == 0:  # 每1000000个点进行打印折线图
+            plt.figure(figsize=(20, 8), dpi=80)
+            plt.ylabel('Recon_loss')
+            plt.xlabel('iter_num')
+            print(iter_num, loss_memory)
+            plt.plot(iter_num, loss_memory)
+            os.makedirs(opt.saved_path, exist_ok=True)
+            plt.savefig("{}/flappy_bird_{}.jpg".format(opt.saved_path, iter+1))
+            plt.close()
+
+    torch.save(model, "{}/flappy_bird_{}".format(os.path.join(opt.saved_path, 'models'), iter + 1))
 
 
 if __name__ == "__main__":
